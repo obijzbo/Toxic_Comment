@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Sun Mar 14 05:08:45 2021
+
+@author: tns
+"""
+
+import pandas as pd
+import numpy as np
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import LinearSVC
+
+import re
+import string
+
+train = pd.read_csv('/media/tns/Resource/ML Project/jigsaw-toxic-comment-classification-challenge/train.csv')
+test = pd.read_csv('/media/tns/Resource/ML Project/jigsaw-toxic-comment-classification-challenge/test.csv')
+test_label = pd.read_csv('/media/tns/Resource/ML Project/jigsaw-toxic-comment-classification-challenge/test_labels.csv')
+
+train["label_count"] = train["toxic"] + train["severe_toxic"] + train["obscene"] \
+                        + train["threat"] + train["insult"] + train["identity_hate"]
+
+print(len(train[train["label_count"] == 1]), len(train[train["label_count"] == 0]), len(train[train["label_count"] > 1]))
+
+COMMENT = 'comment_text'
+train[COMMENT].fillna("unknown", inplace=True)
+test[COMMENT].fillna("unknown", inplace=True)
+
+#build model
+
+alpha = 0.0001
+
+re_tok = re.compile(f'([{string.punctuation}“”¨«»®´·º½¾¿¡§£₤‘’])')
+def tokenize(s): return re_tok.sub(r' \1 ', s).split()
+
+n = train.shape[0]
+vec = TfidfVectorizer(ngram_range=(1,2), tokenizer=tokenize,
+                      min_df=3, max_df=0.9, strip_accents='unicode', use_idf=True,
+                      smooth_idf=True, sublinear_tf=True)
+
+trn_term_doc = vec.fit_transform(train[COMMENT])
+test_term_doc = vec.transform(test[COMMENT])
+
+def get_count(feature_x, y, label):
+    index_label = (y == label).nonzero()[0]
+    matrix_label = feature_x[index_label, :]
+    count = matrix_label.sum(0) + alpha
+    norm_count = count / np.linalg.norm(count, ord=1)
+    return norm_count
+
+def get_trained_model(model, feature_x, x, y):
+    p_count = get_count(feature_x, y, 1)
+    q_count = get_count(feature_x, y, 0)
+    r = np.log(p_count / q_count)
+    
+    x_nb = x.multiply(r)
+    return model.fit(x_nb, y), r
+
+def get_accuracy(model, x_feature, x, test_x):
+    correct_count = 0
+    total_count = 0
+    for i, j in enumerate(["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]):
+        print('fit', j)
+        y = train[j].values
+        m,r = get_trained_model(model, x_feature, x, y)
+        
+        x_test_nb = test_x.multiply(r)
+        
+        y_pred = m.predict(x_test_nb)
+
+        y_test = test_label[j].values
+        graded_mask = y_test != -1
+        correct_count += sum(y_test[graded_mask] == y_pred[graded_mask])
+        total_count += len(y_test[graded_mask])
+        print(correct_count, total_count)
+    return (correct_count / total_count)
+
+# TF-IDF feature, TF-IDF input with lr model
+model = LogisticRegression(C=4, max_iter=500)
+print(get_accuracy(model, trn_term_doc, trn_term_doc, test_term_doc))
+
+# TF-IDF feature, TF-IDF input with svm model
+model = LinearSVC(C=4, max_iter=2000)
+print(get_accuracy(model, trn_term_doc, trn_term_doc, test_term_doc))
